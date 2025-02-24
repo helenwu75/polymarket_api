@@ -108,21 +108,79 @@ def print_market_details(market_data):
             
         print(f"{key}: {formatted_value}")
     
-    # Print any nested objects if they exist
-    if "outcomes" in market_data and market_data["outcomes"]:
+    # Handle specific fields with special formatting
+    
+    # For outcomes field
+    if "outcomes" in market_data:
         print("\n===== OUTCOMES =====")
-        for i, outcome in enumerate(market_data["outcomes"]):
-            print(f"Outcome {i+1}: {outcome}")
+        outcomes = market_data["outcomes"]
+        
+        # Check if it's already a proper list
+        if isinstance(outcomes, list):
+            for i, outcome in enumerate(outcomes):
+                print(f"Outcome {i+1}: {outcome}")
+        # Check if it's a string representation of a list
+        elif isinstance(outcomes, str):
+            try:
+                import json
+                parsed_outcomes = json.loads(outcomes.replace("'", "\""))
+                for i, outcome in enumerate(parsed_outcomes):
+                    print(f"Outcome {i+1}: {outcome}")
+            except json.JSONDecodeError:
+                # If JSON parsing fails, look for alternatives
+                print("Outcomes: " + outcomes)
     
-    if "outcomePrices" in market_data and market_data["outcomePrices"]:
+    # For outcomePrices field
+    if "outcomePrices" in market_data:
         print("\n===== OUTCOME PRICES =====")
-        for i, price in enumerate(market_data["outcomePrices"]):
-            print(f"Price {i+1}: {price}")
+        prices = market_data["outcomePrices"]
+        
+        # Check if it's already a proper list
+        if isinstance(prices, list):
+            for i, price in enumerate(prices):
+                print(f"Price {i+1}: {price}")
+        # Check if it's a string representation of a list
+        elif isinstance(prices, str):
+            try:
+                import json
+                parsed_prices = json.loads(prices.replace("'", "\""))
+                for i, price in enumerate(parsed_prices):
+                    print(f"Price {i+1}: {price}")
+            except json.JSONDecodeError:
+                # If JSON parsing fails, look for alternatives
+                print("Prices: " + prices)
     
-    if "clobTokenIds" in market_data and market_data["clobTokenIds"]:
+    # For clobTokenIds field
+    if "clobTokenIds" in market_data:
         print("\n===== CLOB TOKEN IDs =====")
-        for i, token_id in enumerate(market_data["clobTokenIds"]):
-            print(f"Token ID {i+1}: {token_id}")
+        token_ids = market_data["clobTokenIds"]
+        
+        # Check if it's already a proper list
+        if isinstance(token_ids, list):
+            for i, token_id in enumerate(token_ids):
+                print(f"Token ID {i+1}: {token_id}")
+        # Check if it's a string representation of a list
+        elif isinstance(token_ids, str):
+            try:
+                import json
+                # Try to parse it as JSON
+                parsed_tokens = json.loads(token_ids.replace("'", "\""))
+                # If there are only two token IDs, display them nicely
+                if len(parsed_tokens) <= 5:
+                    for i, token_id in enumerate(parsed_tokens):
+                        print(f"Token ID {i+1}: {token_id}")
+                # If there are many token IDs, just show the first few
+                else:
+                    for i, token_id in enumerate(parsed_tokens[:3]):
+                        print(f"Token ID {i+1}: {token_id}")
+                    print(f"... and {len(parsed_tokens) - 3} more token IDs")
+            except json.JSONDecodeError:
+                # If it's a truncated string (looks like in your example)
+                if "..." in token_ids:
+                    print(f"CLOB Token IDs: {token_ids}")
+                # Otherwise, just display the string as is
+                else:
+                    print(f"CLOB Token IDs: {token_ids}")
 
 def export_market_details(market_data, format="all"):
     """
@@ -175,6 +233,6 @@ def export_market_details(market_data, format="all"):
     # print_market_details(market)
     
     # Example 2: Get market by slug
-    # market = get_market_details("will-joe-biden-get-coronavirus-before-the-election", id_type="slug")
+    # market = get_market_details("will-kanye-launch-a-coin-in-february", id_type="slug")
     # print_market_details(market)
     # export_market_details(market)
