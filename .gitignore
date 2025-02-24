@@ -1,0 +1,7 @@
+# Common VSCode and project ignores
+node_modules/
+.env
+dist/
+build/
+*.log
+.vscode/
