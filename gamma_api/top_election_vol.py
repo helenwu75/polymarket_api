@@ -44,7 +44,7 @@ NUMERIC_COLUMNS = [
     "event_liquidityClob", "event_commentCount"
 ]
 
-def get_top_closed_election_markets_by_volume(limit=500):
+def get_top_closed_election_markets_by_volume(limit=10):
     """
     Query the GAMMA API for closed markets, filter for election-related ones,
     and return the top ones by volume.
@@ -187,7 +187,7 @@ def extract_market_data(markets):
     
     return df
 
-def save_top_election_markets_data(df, output_dir="data"):
+def save_top_election_markets_data(df, output_dir="election_data"):
     """
     Save the extracted data to CSV and JSON files.
     
@@ -213,7 +213,7 @@ def save_top_election_markets_data(df, output_dir="data"):
 
 def main():
     # Get top election markets by volume
-    markets_df = get_top_closed_election_markets_by_volume(limit=500)
+    markets_df = get_top_closed_election_markets_by_volume(limit=100)
     
     # Print summary statistics
     print("\nSummary Statistics:")

@@ -47,7 +47,7 @@ NUMERIC_COLUMNS = [
     "event_liquidityClob", "event_commentCount"
 ]
 
-def get_closed_election_markets(limit=1000):
+def get_closed_election_markets(limit=10):
     """
     Query the GAMMA API for closed markets, then filter for election-related markets by keywords.
     
@@ -62,7 +62,7 @@ def get_closed_election_markets(limit=1000):
     # Initialize variables for pagination
     election_markets = []
     offset = 0
-    page_size = 1000  # Fetch 200 markets at a time
+    page_size = 500  # Fetch 200 markets at a time
     
     while len(election_markets) < limit:
         # Build query parameters for closed markets sorted by volume
@@ -196,7 +196,7 @@ def save_data(df):
 
 def main():
     # Get closed election markets
-    markets = get_closed_election_markets(limit=1000)
+    markets = get_closed_election_markets(limit=10)
     
     if not markets:
         print("No closed election markets found. Exiting.")
