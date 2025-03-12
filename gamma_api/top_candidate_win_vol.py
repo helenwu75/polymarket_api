@@ -16,19 +16,17 @@ ELECTION_KEYWORDS = ["election", "elected"]
 
 # Pattern to exclude undesired markets
 EXCLUDE_PATTERNS = [
-    r"popular vote", r"closest state", r"margin of victory", r"by \d+", 
-    r"VP nominee", r"shutdown", r"runoff", r"electoral college", r"cabinet",
-    r"recount", r"debate", r"inaugurat", r"drop out", r"balance of power"
+    
 ]
 
 # Precompile regex patterns
 COMPILED_EXCLUDE_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern in EXCLUDE_PATTERNS]
 HAS_NUMBER_PATTERN = re.compile(r'\d+')
 
-# Properties to collect
+# Define target properties to collect
 TARGET_PROPERTIES = [
-    "id", "question", "slug","conditionId", "startDate", "endDate", 
-     "description", "outcomes", "outcomePrices", "liquidity",
+    "id", "question", "slug", "conditionId", "startDate", "endDate", 
+    "description", "outcomes", "outcomePrices", "liquidity",
     "volume", "active", "closed", "marketMakerAddress", "createdAt", 
     "updatedAt", "archived", "restricted", "groupItemTitle", 
     "groupItemThreshold", "questionID", "enableOrderBook", 
@@ -62,7 +60,7 @@ def fetch_markets_batch(offset, limit=500):
     
     # Implement retry logic
     max_retries = 3
-    retry_delay = 2  # seconds
+    retry_delay = 5  # seconds
     
     for attempt in range(max_retries):
         try:
@@ -153,6 +151,58 @@ def fetch_all_markets(max_workers=10):
     print(f"Completed exhaustive search. Found {len(all_markets)} total markets.")
     return all_markets
 
+def extract_market_data(markets):
+    """
+    Extract relevant information from market data including all target properties
+    and event properties, with proper numeric conversion.
+    
+    Args:
+        markets (list): List of market data from the GAMMA API
+        
+    Returns:
+        pd.DataFrame: DataFrame with extracted market information
+    """
+    # Pre-allocate the list with the correct size for better performance
+    extracted_data = []
+    
+    for market in markets:
+        # Extract basic market information based on TARGET_PROPERTIES
+        market_data = {}
+        for prop in TARGET_PROPERTIES:
+            market_data[prop] = market.get(prop)
+            
+        # Extract event-related information if available
+        if "events" in market and market["events"] and len(market["events"]) > 0:
+            event = market["events"][0]  # Take the first event
+            for prop in EVENT_PROPERTIES:
+                market_data[f"event_{prop}"] = event.get(prop)
+        
+        # Extract token information if available
+        if "tokens" in market and market["tokens"] and len(market["tokens"]) > 0:
+            for i, token in enumerate(market["tokens"][:2]):  # Process first 2 tokens
+                market_data[f"token_{i+1}_id"] = token.get("token_id")
+                market_data[f"token_{i+1}_outcome"] = token.get("outcome")
+        
+        extracted_data.append(market_data)
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(extracted_data)
+    
+    # Convert numeric columns
+    for col in NUMERIC_COLUMNS:
+        if col in df.columns:
+            # First, convert to string to handle any None values
+            df[col] = df[col].astype(str)
+            
+            # Replace empty strings and 'None' with NaN
+            df[col] = df[col].replace('None', pd.NA)
+            df[col] = df[col].replace('', pd.NA)
+            
+            # Convert to numeric, handling errors
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    return df
+
 def get_top_markets_by_volume(top_n=500, max_workers=10):
     """Get ALL markets, filter them, and return the top N by volume."""
     # Step 1: Fetch ALL markets without any filtering
@@ -197,14 +247,11 @@ def get_top_markets_by_volume(top_n=500, max_workers=10):
     
     return top_markets
 
-def save_market_data(markets, output_dir="data"):
+def save_market_data(df, output_dir="data"):
     """Save market data to CSV and JSON files."""
-    if not markets:
+    if df.empty:
         print("No markets to save.")
         return
-    
-    # Create DataFrame
-    df = pd.DataFrame([{prop: market.get(prop) for prop in TARGET_PROPERTIES} for market in markets])
     
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
@@ -245,8 +292,11 @@ def main():
         max_workers=10    # Use 10 concurrent workers
     )
     
+    # Convert markets to dataframe with all properties
+    markets_df = extract_market_data(markets)
+    
     # Save market data
-    save_market_data(markets)
+    save_market_data(markets_df)
     
     # Print execution time
     elapsed_time = time.time() - start_time
