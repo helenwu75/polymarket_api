@@ -250,6 +250,6 @@ def export_market_details(market_data, format="all"):
 # print_market_details(market)
 
 # Example 2: Get market by slug
-# market = get_market_details("will-lori-lightfoot-win-the-2023-chicago-mayoral-election", id_type="slug")
+# market = get_market_details("will-trump-mention-biden-the-most-in-south-carolina-speech", id_type="slug")
 # print_market_details(market)
 # export_market_details(market)
