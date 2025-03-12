@@ -5,6 +5,8 @@ dist/
 build/
 *.log
 .vscode/
+keys.py
+keys.env
 
 # Ignore all CSV files
 *.csv
