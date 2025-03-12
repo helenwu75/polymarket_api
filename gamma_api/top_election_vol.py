@@ -3,20 +3,30 @@ import pandas as pd
 import time
 import json
 import os
+import re
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # GAMMA API endpoint
 GAMMA_API_URL = "https://gamma-api.polymarket.com"
 
-# Define election-related keywords
-ELECTION_KEYWORDS = [
-    "election", "presidential", "popular vote","VP nominee","presidential nominee"
+# Define winning and election keywords
+WIN_KEYWORDS = ["win", "wins"]
+ELECTION_KEYWORDS = ["election", "elected"]
+
+# Pattern to exclude undesired markets
+EXCLUDE_PATTERNS = [
+    
 ]
+
+# Precompile regex patterns
+COMPILED_EXCLUDE_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern in EXCLUDE_PATTERNS]
+HAS_NUMBER_PATTERN = re.compile(r'\d+')
 
 # Define target properties to collect
 TARGET_PROPERTIES = [
-    "id", "question", "slug","conditionId", "startDate", "endDate", 
-     "description", "outcomes", "outcomePrices", "liquidity",
+    "id", "question", "slug", "conditionId", "startDate", "endDate", 
+    "description", "outcomes", "outcomePrices", "liquidity",
     "volume", "active", "closed", "marketMakerAddress", "createdAt", 
     "updatedAt", "archived", "restricted", "groupItemTitle", 
     "groupItemThreshold", "questionID", "enableOrderBook", 
@@ -44,109 +54,112 @@ NUMERIC_COLUMNS = [
     "event_liquidityClob", "event_commentCount"
 ]
 
-def get_top_closed_election_markets_by_volume(limit=10):
-    """
-    Query the GAMMA API for closed markets, filter for election-related ones,
-    and return the top ones by volume.
+def fetch_markets_batch(offset, limit=500):
+    """Fetch a batch of closed markets from the API with retry logic."""
+    # Added closed=true parameter to get only closed markets
+    params = {"limit": limit, "offset": offset, "closed": "true"}
     
-    Args:
-        limit (int): Maximum number of top markets to retrieve
-        
-    Returns:
-        pd.DataFrame: DataFrame with the top election markets by volume
-    """
-    print(f"Fetching closed election markets from GAMMA API...")
+    # Implement retry logic
+    max_retries = 3
+    retry_delay = 5  # seconds
     
-    # Initialize variables for pagination
-    all_markets = []
-    offset = 0
-    page_size = 500  # Fetch 100 markets at a time
-    
-    # Step 1: Fetch all closed markets
-    while True:
-        # Build query parameters for closed markets
-        params = {
-            "limit": page_size,
-            "offset": offset,
-            "closed": "true"  # Only get closed markets
-        }
-        
+    for attempt in range(max_retries):
         try:
-            # Make API request
-            response = requests.get(f"{GAMMA_API_URL}/markets", params=params)
+            response = requests.get(f"{GAMMA_API_URL}/markets", params=params, timeout=15)
             response.raise_for_status()
-            
-            # Parse response
             data = response.json()
             
-            # Handle different response formats
             if isinstance(data, dict) and "markets" in data:
-                markets = data.get("markets", [])
+                return data.get("markets", [])
             elif isinstance(data, list):
-                markets = data
+                return data
             else:
-                markets = []
-            
-            # Break if no more markets found
-            if not markets:
-                break
-            
-            # Add to our collection
-            all_markets.extend(markets)
-            
-            # Increment offset for next page
-            offset += len(markets)
-            
-            # Print progress
-            print(f"Fetched {len(markets)} markets (total: {len(all_markets)})")
-            
-            # Small delay to avoid API rate limits
-            time.sleep(0.5)
-            
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching markets: {e}")
-            break
-    
-    print(f"Fetched a total of {len(all_markets)} closed markets")
-    
-    # Step 2: Filter for election-related markets
-    election_markets = []
-    for market in all_markets:
-        question = market.get("question", "").lower()
-        description = market.get("description", "").lower()
+                return []
+                
+        except Exception as e:
+            if attempt < max_retries - 1:
+                delay = retry_delay * (2 ** attempt)  # Exponential backoff
+                print(f"Error fetching markets at offset {offset}. Retrying in {delay} seconds... ({e})")
+                time.sleep(delay)
+            else:
+                print(f"Failed to fetch markets at offset {offset} after {max_retries} attempts: {e}")
+                return []
+
+def is_valid_market(market):
+    """Check if market meets all criteria."""
+    # Verify the market is closed
+    if not market.get("closed", False):
+        return False
         
-        # Check if any election keyword is in the question or description
-        if any(keyword in question for keyword in ELECTION_KEYWORDS) or \
-           any(keyword in description for keyword in ELECTION_KEYWORDS):
-            election_markets.append(market)
+    # Check groupItemTitle first
+    group_item_title = market.get("groupItemTitle")
+    if not group_item_title or not isinstance(group_item_title, str) or not group_item_title.strip() or HAS_NUMBER_PATTERN.search(group_item_title):
+        return False
     
-    print(f"Found {len(election_markets)} election-related markets")
+    # Get text content for keyword search
+    question = market.get("question", "").lower()
+    description = market.get("description", "").lower() if market.get("description") else ""
+    text_content = question + " " + description
     
-    # Step 3: Sort by volume
-    def get_volume(market):
-        # Try different volume field names
-        vol = market.get("volumeNum", market.get("volume", 0))
-        if vol is None:
-            return 0
-        try:
-            return float(vol)
-        except (ValueError, TypeError):
-            return 0
+    # Check for excluded patterns
+    for pattern in COMPILED_EXCLUDE_PATTERNS:
+        if pattern.search(text_content):
+            return False
     
-    sorted_markets = sorted(election_markets, key=get_volume, reverse=True)
+    # Check for required keywords
+    has_win_keyword = any(win_word in text_content for win_word in WIN_KEYWORDS)
+    has_election_keyword = any(election_word in text_content for election_word in ELECTION_KEYWORDS)
     
-    # Step 4: Take the top markets
-    result = sorted_markets[:limit]
-    print(f"Returning top {len(result)} election markets by volume")
+    return has_win_keyword and has_election_keyword
+
+def fetch_all_markets(max_workers=10):
+    """Fetch ALL closed markets exhaustively using pagination."""
+    print("Starting exhaustive closed market search...")
     
-    # Convert to DataFrame
-    market_df = extract_market_data(result)
+    all_markets = []
+    batch_size = 500
+    offset = 0
+    has_more = True
     
-    return market_df
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        while has_more:
+            futures = []
+            
+            # Create batch of requests
+            for i in range(max_workers):
+                current_offset = offset + (i * batch_size)
+                futures.append((current_offset, executor.submit(fetch_markets_batch, current_offset, batch_size)))
+            
+            # Process results
+            all_empty = True
+            for current_offset, future in futures:
+                try:
+                    markets = future.result()
+                    if markets:
+                        all_empty = False
+                        all_markets.extend(markets)
+                        print(f"Fetched {len(markets)} closed markets at offset {current_offset} (total: {len(all_markets)})")
+                except Exception as e:
+                    print(f"Error processing batch at offset {current_offset}: {e}")
+            
+            # Update offset for next batch
+            offset += batch_size * max_workers
+            
+            # If all requests returned empty, we've likely reached the end
+            if all_empty:
+                has_more = False
+                print("Reached the end of available closed markets.")
+            
+            # Brief pause to avoid overwhelming the API
+            time.sleep(0.5)
+    
+    print(f"Completed exhaustive search. Found {len(all_markets)} total closed markets.")
+    return all_markets
 
 def extract_market_data(markets):
     """
-    Extract relevant information from market data.
+    Extract relevant information from market data including all target properties
+    and event properties, with proper numeric conversion.
     
     Args:
         markets (list): List of market data from the GAMMA API
@@ -154,7 +167,7 @@ def extract_market_data(markets):
     Returns:
         pd.DataFrame: DataFrame with extracted market information
     """
-    # Define the fields we want to extract
+    # Pre-allocate the list with the correct size for better performance
     extracted_data = []
     
     for market in markets:
@@ -164,14 +177,14 @@ def extract_market_data(markets):
             market_data[prop] = market.get(prop)
             
         # Extract event-related information if available
-        if "events" in market and len(market["events"]) > 0:
+        if "events" in market and market["events"] and len(market["events"]) > 0:
             event = market["events"][0]  # Take the first event
             for prop in EVENT_PROPERTIES:
                 market_data[f"event_{prop}"] = event.get(prop)
         
         # Extract token information if available
-        if "tokens" in market and len(market["tokens"]) > 0:
-            for i, token in enumerate(market["tokens"]):
+        if "tokens" in market and market["tokens"] and len(market["tokens"]) > 0:
+            for i, token in enumerate(market["tokens"][:2]):  # Process first 2 tokens
                 market_data[f"token_{i+1}_id"] = token.get("token_id")
                 market_data[f"token_{i+1}_outcome"] = token.get("outcome")
         
@@ -183,57 +196,116 @@ def extract_market_data(markets):
     # Convert numeric columns
     for col in NUMERIC_COLUMNS:
         if col in df.columns:
+            # First, convert to string to handle any None values
+            df[col] = df[col].astype(str)
+            
+            # Replace empty strings and 'None' with NaN
+            df[col] = df[col].replace('None', pd.NA)
+            df[col] = df[col].replace('', pd.NA)
+            
+            # Convert to numeric, handling errors
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
     return df
 
-def save_top_election_markets_data(df, output_dir="election_data"):
-    """
-    Save the extracted data to CSV and JSON files.
+def get_top_markets_by_volume(top_n=500, max_workers=10):
+    """Get ALL closed markets, filter them, and return the top N by volume."""
+    # Step 1: Fetch ALL closed markets without any filtering
+    all_markets = fetch_all_markets(max_workers=max_workers)
     
-    Args:
-        df (pd.DataFrame): DataFrame with market data
-        output_dir (str): Directory to save the output files
-    """
-    # Create output directory if it doesn't exist
+    # Step 2: Filter markets in parallel
+    print("Filtering for closed election win markets...")
+    filtered_markets = []
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Process in chunks to avoid memory issues
+        chunk_size = 1000
+        for i in range(0, len(all_markets), chunk_size):
+            chunk = all_markets[i:i+chunk_size]
+            results = list(executor.map(is_valid_market, chunk))
+            
+            for market, is_valid in zip(chunk, results):
+                if is_valid:
+                    filtered_markets.append(market)
+            
+            print(f"Processed {i + len(chunk)}/{len(all_markets)} markets - Found {len(filtered_markets)} matches so far")
+    
+    print(f"Found {len(filtered_markets)} closed markets matching criteria.")
+    
+    # Step 3: Sort by volume
+    print("Sorting markets by volume...")
+    
+    def get_volume(market):
+        vol = market.get("volumeNum")
+        if vol is None:
+            vol = market.get("volume", 0)
+        try:
+            return float(vol) if vol is not None else 0
+        except (ValueError, TypeError):
+            return 0
+    
+    filtered_markets.sort(key=get_volume, reverse=True)
+    
+    # Step 4: Get top N markets
+    top_markets = filtered_markets[:top_n]
+    print(f"Selected top {len(top_markets)} closed markets by volume out of {len(filtered_markets)} matches.")
+    
+    return top_markets
+
+def save_market_data(df, output_dir="data"):
+    """Save market data to CSV and JSON files."""
+    if df.empty:
+        print("No markets to save.")
+        return
+    
+    # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
-    # Generate timestamp for filenames
+    # Generate filenames with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    csv_filename = f"{output_dir}/top_closed_election_markets_{timestamp}.csv"
+    json_filename = f"{output_dir}/top_closed_election_markets_{timestamp}.json"
     
-    # Save as CSV
-    csv_filename = f"{output_dir}/top_election_markets_{timestamp}.csv"
+    # Save files
     df.to_csv(csv_filename, index=False)
-    print(f"Saved data to {csv_filename}")
-    
-    # Save as JSON
-    json_filename = f"{output_dir}/top_election_markets_{timestamp}.json"
     df.to_json(json_filename, orient="records", indent=2)
-    print(f"Saved data to {json_filename}")
-
-def main():
-    # Get top election markets by volume
-    markets_df = get_top_closed_election_markets_by_volume(limit=100)
+    
+    print(f"Saved data to {csv_filename} and {json_filename}")
     
     # Print summary statistics
-    print("\nSummary Statistics:")
-    print(f"Total Markets: {len(markets_df)}")
+    if 'volumeNum' in df.columns:
+        volume_col = 'volumeNum'
+    elif 'volume' in df.columns:
+        volume_col = 'volume'
+    else:
+        volume_col = None
     
-    # Calculate volume statistics if volume columns exist and are numeric
-    volume_col = None
-    for col in ['volumeNum', 'volume']:
-        if col in markets_df.columns and pd.api.types.is_numeric_dtype(markets_df[col]):
-            volume_col = col
-            break
+    if volume_col and not df.empty:
+        total_volume = df[volume_col].sum()
+        avg_volume = df[volume_col].mean()
+        print(f"\nSummary Statistics:")
+        print(f"Total Closed Markets: {len(df)}")
+        print(f"Total Volume: {total_volume:,.2f}")
+        print(f"Average Volume: {avg_volume:,.2f}")
+
+def main():
+    start_time = time.time()
     
-    if volume_col:
-        print(f"Total Volume: {markets_df[volume_col].sum():,.2f}")
-        print(f"Average Volume per Market: {markets_df[volume_col].mean():,.2f}")
-        print(f"Highest Volume: {markets_df[volume_col].max():,.2f}")
-        print(f"Lowest Volume: {markets_df[volume_col].min():,.2f}")
+    # Get ALL closed markets, filter them, and select top 500 by volume
+    markets = get_top_markets_by_volume(
+        top_n=500,        # Return top 500 by volume
+        max_workers=10    # Use 10 concurrent workers
+    )
     
-    # Save the data
-    save_top_election_markets_data(markets_df)
+    # Convert markets to dataframe with all properties
+    markets_df = extract_market_data(markets)
+    
+    # Save market data
+    save_market_data(markets_df)
+    
+    # Print execution time
+    elapsed_time = time.time() - start_time
+    print(f"\nExecution completed in {elapsed_time:.2f} seconds")
 
 if __name__ == "__main__":
     main()
